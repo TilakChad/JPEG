@@ -226,6 +226,10 @@ void BaselineDCT(JPEG *img)
         Log(Info, "For component %d : \n\tIdentifier : %02X \n\t HiVi    : %02X \n\t QTablePtr : %02X", comp,
             img->img.components[comp].identifier, img->img.components[comp].HiVi, img->img.components[comp].qtableptr);
     }
+
+    // Set up for chroma subsampling
+    img->img.horizontal_subsampling = (img->img.components[0].HiVi & 0xF0) >> 4;
+    img->img.vertical_subsampling   = (img->img.components[0].HiVi & 0x0F);
 }
 
 void StartOfScanSegment(JPEG *img)
@@ -444,7 +448,7 @@ bool InverseQuantization(JPEG *jpeg)
             Log(Error, "Invalid quantizationt table.");
             exit(-1);
         }
-        for (uint32_t mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu)
+        for (uint32_t mcu = 0; mcu < jpeg->img.components[comp].mcu_counts; ++mcu)
         {
             ApplyInvQuantization(&jpeg->img.components[comp].mcu_blocks[mcu],
                                  &jpeg->quantization_tables.qtables[jpeg->img.components[comp].qtableptr]);
@@ -462,27 +466,10 @@ float alpha(uint8_t u)
 
 void InverseCosineTransform(JPEG *jpeg)
 {
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
-
-    Log(Warning, "------------------------------ Before Cosine Transform ------------------------------");
-    for (uint16_t mcu = 0; mcu < 200; ++mcu)
-    {
-        for (uint8_t i = 0; i < 8; ++i)
-        {
-            for (uint8_t j = 0; j < 8; ++j)
-            {
-                printf("%6d  ", jpeg->img.components[0].mcu_blocks[mcu].block[i * 8 + j]);
-            }
-            putchar('\n');
-        }
-        putchar('\n');
-    }
-
     // For each block now apply the inverse discrete cosine transform
     for (uint8_t comp = 0; comp < jpeg->img.channels; ++comp)
     {
-        for (uint32_t mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu)
+        for (uint32_t mcu = 0; mcu < jpeg->img.components[comp].mcu_counts; ++mcu)
         {
             MCUBlock  dctblock = jpeg->img.components[comp].mcu_blocks[mcu];
             MCUBlock *curblock = jpeg->img.components[comp].mcu_blocks + mcu;
@@ -508,9 +495,10 @@ void InverseCosineTransform(JPEG *jpeg)
         }
     }
     Log(Warning, "------------------------------ Inverse Cosine Transform first MCU ------------------------------");
-    for (uint16_t mcu = 0; mcu < 110; ++mcu)
+    for (uint16_t mcu = 0; mcu < 100; ++mcu)
     {
-        for (uint8_t i = 0; i < 8; ++i)
+        for (uint8_t i = 0; i < 8;
+             ++i)
         {
             for (uint8_t j = 0; j < 8; ++j)
             {
@@ -532,13 +520,10 @@ uint8_t clamp0_255(int16_t val)
 }
 void InverseSignedNormalization(JPEG *jpeg)
 {
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
-
     // For each block now apply the inverse discrete cosine transform
     for (uint8_t comp = 0; comp < jpeg->img.channels; ++comp)
     {
-        for (uint32_t mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu)
+        for (uint32_t mcu = 0; mcu < jpeg->img.components[comp].mcu_counts; ++mcu)
         {
             for (uint8_t i = 0; i < 64; ++i)
             {

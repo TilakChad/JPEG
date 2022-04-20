@@ -124,7 +124,6 @@ int32_t InterpretValue(uint64_t val, uint8_t len, JPEG *jpeg)
     // So bitwise complement it and return negative value
     int32_t nval = ~val & ((1 << len) - 1);
     Log(Warning, "Val is %02X, len is %d and returned %d.", val, len, -nval);
-    Log(Error, "Returned negative ");
     return -nval;
 }
 
@@ -195,51 +194,167 @@ void DecodeAC(BitStream *bit_stream, JPEG *jpeg, HTable *htable_ac, MCUBlock *mc
     }
 }
 
+/* bool DecodeHuffmanStream(JPEG *jpeg) */
+/* { */
+/*     // for each mcu and each component, decode the value */
+/*     // No of mcu are total no. of 8x8 blocks that can be adjusted in the image */
+/*     // Divide the whole picture into grid of 8x8 blocks and that will give total no. of block used in jpeg */
+/*     // Need to write a bmp writer too, that will help use visualize the image */
+/*     int nmcu_h = (jpeg->img.width + 7) / 8; */
+/*     int nmcu_w = (jpeg->img.height + 7) / 8; */
+
+/*     // Allocate resource for mcu blocks */
+
+/*     BitStream bit_stream = {0}; */
+
+/*     for (uint32_t i = 0; i < jpeg->img.channels; ++i) */
+/*     { */
+/*         jpeg->img.components[i].mcu_counts = nmcu_h * nmcu_w; */
+/*         jpeg->img.components[i].mcu_blocks = malloc(sizeof(*jpeg->img.components[i].mcu_blocks) * nmcu_h * nmcu_w);
+ */
+/*     } */
+
+/*     // Previous differential DC values component wise */
+/*     int32_t prevDC[4] = {0}; */
+
+/*     // Print all DC tables and their components */
+/*     // for (int mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu) */
+/*     for (int mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu) */
+/*     { */
+/*         // For each component */
+/*         for (int comp = 0; comp < jpeg->img.channels; ++comp) */
+/*         { */
+/*             MCUBlock *active_mcu = jpeg->img.components[comp].mcu_blocks + mcu; */
+/*             // Decode the relevant MCU */
+/*             // Choose the proper huffman table and decode the run length */
+/*             // Component 0 is usually grayscale image */
+/*             // Choose the AC ID and DC ID */
+
+/*             // Now off to decoding actual image */
+/*             active_mcu->block[0] = */
+/*                 DecodeDC(&bit_stream, jpeg, &jpeg->huffman_tables.tables[jpeg->img.components[comp].htable_dc_index])
+ * + */
+/*                 prevDC[comp]; */
+/*             prevDC[comp] = active_mcu->block[0]; */
+/*             DecodeAC(&bit_stream, jpeg, &jpeg->huffman_tables.tables[jpeg->img.components[comp].htable_ac_index], */
+/*                      active_mcu); */
+/*         } */
+/*         Log(Warning, "The ptr is at %d after mcu %d.", jpeg->hstream.pos, mcu); */
+/*     } */
+/*     putchar('\n'); */
+/*     InverseQuantization(jpeg); */
+/*     Log(Warning, "****************************** Printing the first decoded MCU ******************************"); */
+
+/*     for (int i = 0; i < 8; ++i) */
+/*     { */
+/*         for (int j = 0; j < 8; ++j) */
+/*             printf("%7d ", jpeg->img.components[0].mcu_blocks[0].block[i * 8 + j]); */
+/*         putchar('\n'); */
+/*     } */
+/*     return true; */
+/* } */
+
+// bool DecodeHuffmanStreamChromaSubsampled(JPEG *jpeg)
+
 bool DecodeHuffmanStream(JPEG *jpeg)
 {
     // for each mcu and each component, decode the value
     // No of mcu are total no. of 8x8 blocks that can be adjusted in the image
     // Divide the whole picture into grid of 8x8 blocks and that will give total no. of block used in jpeg
     // Need to write a bmp writer too, that will help use visualize the image
-    int nmcu_h = (jpeg->img.width + 7) / 8;
+    // Always assuming the maximum subsampling is 2 we have
+
+    int nmcu_h = (jpeg->img.width + 7) / 8; // Number of horizontal block of 8-pixel if no subsampling done
+
+    if (nmcu_h % jpeg->img.horizontal_subsampling) // Assuming its either 1 or 2
+        nmcu_h += 1;
+
     int nmcu_w = (jpeg->img.height + 7) / 8;
+    if (nmcu_w % jpeg->img.vertical_subsampling)
+        nmcu_w += 1;
 
     // Allocate resource for mcu blocks
 
-    BitStream bit_stream = {0};
+    BitStream bit_stream               = {0};
+    jpeg->img.components[0].mcu_counts = nmcu_h * nmcu_w;
+    jpeg->img.components[1].mcu_counts = (nmcu_h / jpeg->img.horizontal_subsampling) * (nmcu_w / jpeg->img.vertical_subsampling);
+    jpeg->img.components[2].mcu_counts = (nmcu_h / jpeg->img.horizontal_subsampling) * (nmcu_w / jpeg->img.vertical_subsampling);
+
 
     for (uint32_t i = 0; i < jpeg->img.channels; ++i)
-    {
-        jpeg->img.components[i].mcu_counts = nmcu_h * nmcu_w;
-        jpeg->img.components[i].mcu_blocks = malloc(sizeof(*jpeg->img.components[i].mcu_blocks) * nmcu_h * nmcu_w);
-    }
+        jpeg->img.components[i].mcu_blocks = malloc(sizeof(*jpeg->img.components[i].mcu_blocks) * jpeg->img.components[i].mcu_counts);
 
+    int total_mcus = 0;
+    for (uint32_t i = 0; i < jpeg->img.channels; ++i)
+        total_mcus += jpeg->img.components[i].mcu_counts;
     // Previous differential DC values component wise
     int32_t prevDC[4] = {0};
 
     // Print all DC tables and their components
     // for (int mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu)
-    for (int mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu)
-    {
-        // For each component
-        for (int comp = 0; comp < jpeg->img.channels; ++comp)
-        {
-            MCUBlock *active_mcu = jpeg->img.components[comp].mcu_blocks + mcu;
-            // Decode the relevant MCU
-            // Choose the proper huffman table and decode the run length
-            // Component 0 is usually grayscale image
-            // Choose the AC ID and DC ID
+    int luma_count = 0;
+    int cb_index = 0, cr_index = 0, luma_index = 0;
+    const int luma_max_sample = jpeg->img.vertical_subsampling * jpeg->img.horizontal_subsampling;
 
-            // Now off to decoding actual image
-            active_mcu->block[0] =
-                DecodeDC(&bit_stream, jpeg, &jpeg->huffman_tables.tables[jpeg->img.components[comp].htable_dc_index]) +
-                prevDC[comp];
-            prevDC[comp] = active_mcu->block[0];
-            DecodeAC(&bit_stream, jpeg, &jpeg->huffman_tables.tables[jpeg->img.components[comp].htable_ac_index],
-                     active_mcu);
+    bool sampleCb = false, sampleCr = false, sampleLuma = true;
+
+    for (int mcu = 0; mcu < total_mcus; ++mcu)
+    {
+        // TODO :: Write this loop better
+        int comp = 0;
+        if (luma_count < luma_max_sample)
+        {
+            luma_count++;
+            sampleLuma = true;
+            comp = 0;
         }
+        else
+        {
+            if (!sampleCb && !sampleCr)
+            {
+                sampleLuma = false;
+                sampleCb = true;
+                comp     = 1;
+            }
+            else if (sampleCb && !sampleCr)
+            {
+                sampleCr = true;
+                sampleCb = false;
+                comp     = 2;
+            }
+            else
+            {
+                sampleCb   = false;
+                sampleCr   = false;
+                sampleLuma = true;
+                luma_count = 1;
+                comp       = 0;
+            }
+        }
+
+        MCUBlock *active_mcu;
+        if (sampleLuma)
+            active_mcu = jpeg->img.components[comp].mcu_blocks + luma_index++;
+        else if (sampleCb)
+            active_mcu = jpeg->img.components[comp].mcu_blocks + cb_index++;
+        else if (sampleCr)
+            active_mcu = jpeg->img.components[comp].mcu_blocks + cr_index++;
+        else
+        {
+            Log(Error,"Invalid sampling component.");
+            exit(-4);
+        }
+
+        // Now off to decoding actual image
+        active_mcu->block[0] =
+            DecodeDC(&bit_stream, jpeg, &jpeg->huffman_tables.tables[jpeg->img.components[comp].htable_dc_index]) +
+            prevDC[comp];
+        prevDC[comp] = active_mcu->block[0];
+        DecodeAC(&bit_stream, jpeg, &jpeg->huffman_tables.tables[jpeg->img.components[comp].htable_ac_index],
+                 active_mcu);
         Log(Warning, "The ptr is at %d after mcu %d.", jpeg->hstream.pos, mcu);
     }
+
     putchar('\n');
     InverseQuantization(jpeg);
     Log(Warning, "****************************** Printing the first decoded MCU ******************************");
@@ -250,5 +365,6 @@ bool DecodeHuffmanStream(JPEG *jpeg)
             printf("%7d ", jpeg->img.components[0].mcu_blocks[0].block[i * 8 + j]);
         putchar('\n');
     }
+
     return true;
 }

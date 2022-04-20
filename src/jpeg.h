@@ -72,13 +72,16 @@ typedef struct JPEGComponent
     uint8_t htable_dc_index;
     uint8_t qtable_index;
 
-
     uint16_t  mcu_counts;
     MCUBlock *mcu_blocks;
 } JPEGComponent;
 
+
 typedef struct JPEGInfo
 {
+    uint8_t horizontal_subsampling;
+    uint8_t vertical_subsampling;
+
     uint32_t height;
     uint32_t width;
     uint32_t depth;
