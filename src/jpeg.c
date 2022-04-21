@@ -21,15 +21,15 @@ void InitJPEGDecoder(JPEG *jpeg);
 void DecodeJPEG(JPEG *jpeg, HTable *htable, QTable *qtable);
 
 void JPEGtoBMP(JPEG *jpeg, const char *output_file);
+void JPEGtoBMPChromaSubsampled(JPEG *jpeg, const char *output);
 
-JPEG LoadJpegFile(const char *path)
+void LoadJpegFile(JPEG* image, const char *path)
 {
-    JPEG  image = {0};
     FILE *fp    = fopen(path, "rb");
     if (!fp)
     {
         fprintf(stderr, "Error : Failed to open file %s.\n", path);
-        return (JPEG){0};
+        return;
     }
 
     fseek(fp, 0, SEEK_END);
@@ -37,17 +37,16 @@ JPEG LoadJpegFile(const char *path)
 
     rewind(fp);
 
-    image.buffer    = malloc(sizeof(*image.buffer) * (size + 1));
-    size_t readSize = fread(image.buffer, sizeof(*image.buffer), size + 1, fp);
+    image->buffer    = malloc(sizeof(*image->buffer) * (size + 1));
+    size_t readSize = fread(image->buffer, sizeof(*image->buffer), size + 1, fp);
 
-    image.size      = readSize;
+    image->size      = readSize;
     if (readSize != size)
     {
         fprintf(stderr, "Warning : Unknown error in opening file %s.\n", path);
-        return (JPEG){0};
+        return ;
     }
-    InitJPEGDecoder(&image);
-    return image;
+    InitJPEGDecoder(image);
 }
 
 bool ValidateJPEGHeader(JPEG *image)
@@ -170,6 +169,26 @@ void HandleAPPHeaders(JPEG *image)
     }
 }
 
+void CleanUpDecoder(JPEG* image)
+{
+    free(image->buffer);
+
+    // Clean the huffman table and quantization tables
+    // its hot mess, managing memory manually
+    for (int i = 0; i < image->img.channels; ++i)
+        free(image->img.components[i].mcu_blocks);
+    for (int i = 0; i < image->huffman_tables.count; ++i)
+    {
+        free(image->huffman_tables.tables[i].huffman_val);
+        free(image->huffman_tables.tables[i].huffman_code);
+    }
+
+    free(image->huffman_tables.tables);
+    free(image->quantization_tables.qtables);
+
+    free(image->hstream.buffer);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -177,13 +196,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "Insufficient argument provided\nUSAGE : exe ./img.jpg\n");
         return -1;
     }
-    JPEG image = LoadJpegFile(argv[1]);
+    JPEG image = {0};
+    LoadJpegFile(&image, argv[1]);
     if (!ValidateJPEGHeader(&image))
     {
         fprintf(stderr, "Not a valid JPEG file\n");
         return -3;
     }
     HandleAPPHeaders(&image);
+    CleanUpDecoder(&image);
     return 0;
 }
 
@@ -316,7 +337,8 @@ void StartOfScanSegment(JPEG *img)
     InverseSignedNormalization(img);
     // Now comes the merging part, but before that inverse discrete cosine transform
     // Lets try writing the grayscale image to the bmp format though
-    JPEGtoBMP(img, "whatever.bmp");
+    // JPEGtoBMP(img, "whatever.bmp");
+    JPEGtoBMPChromaSubsampled(img, "chromasubsampled.bmp");
 }
 
 void InitJPEGDecoder(JPEG *jpeg)
@@ -382,52 +404,53 @@ void DefineRestartIntervalSegment(JPEG *jpeg)
     jpeg->pos += length;
 }
 
-void JPEGtoBMP(JPEG *jpeg, const char *output)
-{
-    // Lets try writing only the luminance part, not the chrominance part
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
+// Or should we say, blocks to raw array?
+/* void JPEGtoBMP(JPEG *jpeg, const char *output) */
+/* { */
+/*     // Lets try writing only the luminance part, not the chrominance part */
+/*     uint32_t nmcu_h = (jpeg->img.height + 7) / 8; */
+/*     uint32_t nmcu_w = (jpeg->img.width + 7) / 8; */
 
-    // Need to write the color pixels
-    // Form an 1D array
+/*     // Need to write the color pixels */
+/*     // Form an 1D array */
 
-    uint32_t totalpixels = 0;
-    uint8_t *image_data  = malloc(sizeof(*image_data) * (jpeg->img.width * jpeg->img.height * jpeg->img.channels));
+/*     uint32_t totalpixels = 0; */
+/*     uint8_t *image_data  = malloc(sizeof(*image_data) * (jpeg->img.width * jpeg->img.height * jpeg->img.channels)); */
 
-    for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h)
-    {
-        for (uint32_t mcu_w = 0; mcu_w < nmcu_w; ++mcu_w)
-        {
-            uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + mcu_w * 8) * jpeg->img.channels;
+/*     for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h) */
+/*     { */
+/*         for (uint32_t mcu_w = 0; mcu_w < nmcu_w; ++mcu_w) */
+/*         { */
+/*             uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + mcu_w * 8) * jpeg->img.channels; */
 
-            uint32_t colX = 8;
-            if ((mcu_w + 1) * 8 > jpeg->img.width)
-                colX = jpeg->img.width % 8;
-            for (uint32_t row = 0; row < 8; ++row)
-            {
-                for (uint32_t col = 0; col < colX; ++col)
-                {
-                    totalpixels++;
-                    for (uint8_t i = 0; i < jpeg->img.channels; ++i)
-                        *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
-                    /* for (uint8_t i = 0; i < 3; ++i) */
-                    /*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; */
-                }
-                ptr = ptr - colX * jpeg->img.channels;
-                ptr = ptr + jpeg->img.width * jpeg->img.channels;
-            }
-        }
-    }
+/*             uint32_t colX = 8; */
+/*             if ((mcu_w + 1) * 8 > jpeg->img.width) */
+/*                 colX = jpeg->img.width % 8; */
+/*             for (uint32_t row = 0; row < 8; ++row) */
+/*             { */
+/*                 for (uint32_t col = 0; col < colX; ++col) */
+/*                 { */
+/*                     totalpixels++; */
+/*                     for (uint8_t i = 0; i < jpeg->img.channels; ++i) */
+/*                         *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; */
+/*                     /\* for (uint8_t i = 0; i < 3; ++i) *\/ */
+/*                     /\*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; *\/ */
+/*                 } */
+/*                 ptr = ptr - colX * jpeg->img.channels; */
+/*                 ptr = ptr + jpeg->img.width * jpeg->img.channels; */
+/*             } */
+/*         } */
+/*     } */
 
-    YCbCrToRGB(jpeg, image_data);
-    Log(Warning, "Total pixel counts were approximately : %u.", totalpixels);
-    BMP bmp = {0};
-    // Memory for extra padding bytes are to be allocated seperately
-    InitBMP(&bmp, jpeg->img.width * jpeg->img.height * jpeg->img.channels + 1000, jpeg->img.channels, true);
-    WriteBMPHeader(&bmp);
-    WriteBMPData(&bmp, image_data, jpeg->img.width, jpeg->img.height, jpeg->img.channels);
-    WriteBMPToFile(&bmp, output);
-}
+/*     YCbCrToRGB(jpeg, image_data); */
+/*     Log(Warning, "Total pixel counts were approximately : %u.", totalpixels); */
+/*     BMP bmp = {0}; */
+/*     // Memory for extra padding bytes are to be allocated seperately */
+/*     InitBMP(&bmp, jpeg->img.width * jpeg->img.height * jpeg->img.channels + 1000, jpeg->img.channels, true); */
+/*     WriteBMPHeader(&bmp); */
+/*     WriteBMPData(&bmp, image_data, jpeg->img.width, jpeg->img.height, jpeg->img.channels); */
+/*     WriteBMPToFile(&bmp, output); */
+/* } */
 
 void ApplyInvQuantization(MCUBlock *mcu, QTable *qtable)
 {
@@ -438,9 +461,6 @@ void ApplyInvQuantization(MCUBlock *mcu, QTable *qtable)
 bool InverseQuantization(JPEG *jpeg)
 {
     // for every dct block and every components inverse the quantization
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
-
     for (uint8_t comp = 0; comp < jpeg->img.channels; ++comp)
     {
         if (jpeg->img.components[comp].qtableptr >= jpeg->quantization_tables.count)
@@ -495,19 +515,19 @@ void InverseCosineTransform(JPEG *jpeg)
         }
     }
     Log(Warning, "------------------------------ Inverse Cosine Transform first MCU ------------------------------");
-    for (uint16_t mcu = 0; mcu < 100; ++mcu)
-    {
-        for (uint8_t i = 0; i < 8;
-             ++i)
-        {
-            for (uint8_t j = 0; j < 8; ++j)
-            {
-                printf("%6d  ", jpeg->img.components[0].mcu_blocks[mcu].block[i * 8 + j]);
-            }
-            putchar('\n');
-        }
-        putchar('\n');
-    }
+    /* for (uint16_t mcu = 0; mcu < 100; ++mcu) */
+    /* { */
+    /*     for (uint8_t i = 0; i < 8; */
+    /*          ++i) */
+    /*     { */
+    /*         for (uint8_t j = 0; j < 8; ++j) */
+    /*         { */
+    /*             printf("%6d  ", jpeg->img.components[0].mcu_blocks[mcu].block[i * 8 + j]); */
+    /*         } */
+    /*         putchar('\n'); */
+    /*     } */
+    /*     putchar('\n'); */
+    /* } */
 }
 
 uint8_t clamp0_255(int16_t val)
@@ -535,12 +555,14 @@ void InverseSignedNormalization(JPEG *jpeg)
     }
 }
 
+
 void YCbCrToRGB(JPEG *jpeg, uint8_t *img_data)
 {
     int16_t colors[4];
     for (uint32_t h = 0; h < jpeg->img.height; ++h)
     {
         for (uint32_t w = 0; w < jpeg->img.width; ++w)
+
         {
             colors[0] = img_data[0];
             colors[1] = img_data[1] - 128;
@@ -554,7 +576,271 @@ void YCbCrToRGB(JPEG *jpeg, uint8_t *img_data)
             img_data[0] = clamp0_255(r);
             img_data[1] = clamp0_255(g);
             img_data[2] = clamp0_255(b);
+
+            // For grayscale - luminance image (only luma component)
+            /* img_data[0] = clamp0_255(img_data[0]); */
+            /* img_data[1] = clamp0_255(img_data[0]); */
+            /* img_data[2] = clamp0_255(img_data[0]); */
             img_data = img_data + jpeg->img.channels;
         }
     }
+}
+
+
+
+bool ChromaSubSamplingNone(JPEG* jpeg, uint8_t* image_data, uint32_t len);
+bool ChromaSubSamplingBoth(JPEG* jpeg, uint8_t* image_data, uint32_t len);
+
+// returns status
+bool JPEGToRawArray(JPEG* jpeg, uint8_t** out_data, uint32_t* len)
+{
+    *out_data = malloc(sizeof(**out_data) * (jpeg->img.width * jpeg->img.height * jpeg->img.channels));
+    *len      = jpeg->img.width * jpeg->img.height * jpeg->img.channels;
+
+    if (jpeg->img.vertical_subsampling == 1 && jpeg->img.horizontal_subsampling == 1)
+        return ChromaSubSamplingNone(jpeg,*out_data,*len);
+    if (jpeg->img.vertical_subsampling == 2 && jpeg->img.horizontal_subsampling == 2)
+        return ChromaSubSamplingBoth(jpeg,*out_data, *len);
+    Log(Error,"Chroma subsampling method not supported");
+    return false;
+}
+
+bool ChromaSubSamplingNone(JPEG* jpeg, uint8_t* image_data, uint32_t len)
+{
+    uint32_t total_pixels = 0;
+    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
+    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
+
+    for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h)
+    {
+        for (uint32_t mcu_w = 0; mcu_w < nmcu_w; ++mcu_w)
+        {
+            uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + mcu_w * 8) * jpeg->img.channels;
+
+            uint32_t colX = 8;
+            if ((mcu_w + 1) * 8 > jpeg->img.width)
+                colX = jpeg->img.width % 8;
+
+            for (uint32_t row = 0; row < 8; ++row)
+            {
+                for (uint32_t col = 0; col < colX; ++col)
+                {
+                    total_pixels++;
+                    for (uint8_t i = 0; i < jpeg->img.channels; ++i)
+                        *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
+                    /* for (uint8_t i = 0; i < 3; ++i) */
+                    /*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; */
+                }
+                ptr = ptr - colX * jpeg->img.channels;
+                ptr = ptr + jpeg->img.width * jpeg->img.channels;
+            }
+        }
+    }
+    return true;
+}
+
+void ChromaSubSamplingVertical()
+{
+
+}
+
+bool ChromaSubSamplingHorizontal(JPEG* jpeg, uint8_t* image_data)
+{
+    // oof, this is pain
+    uint32_t total_pixels = 0;
+    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
+    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
+
+
+    if (jpeg->img.channels < 3)
+    {
+        Log(Error,"Fewer channels than expected...");
+        exit(-3);
+    }
+
+    MCUBlock *luma_y_block    = jpeg->img.components[0].mcu_blocks;
+    MCUBlock *chroma_cb_block = jpeg->img.components[1].mcu_blocks;
+    MCUBlock *chroma_cr_block = jpeg->img.components[2].mcu_blocks;
+
+    int       wRange          = ceilf(nmcu_w / 2);
+    for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h)
+    {
+        for (uint32_t mcu_w = 0; mcu_w < wRange; ++mcu_w)
+        {
+            uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + mcu_w * 2 * 8) * jpeg->img.channels;
+            uint32_t colX = 8;
+
+            if ((mcu_w * 2 + 1) * 8 > jpeg->img.width)
+                colX = jpeg->img.width % 8;
+            for (uint32_t row = 0; row < 8; ++row)
+            {
+                for (uint32_t col = 0; col < colX; ++col)
+                {
+                    total_pixels++;
+                    /* for (uint8_t i = 0; i < jpeg->img.channels; ++i) */
+                    /*     *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
+                     */
+                    *(ptr++) = luma_y_block->block[row*8+col];
+                    *(ptr++) = chroma_cb_block->block[row*8+col];
+                    *(ptr++) = chroma_cr_block->block[row*8+col];
+                }
+
+                ptr = ptr - colX * jpeg->img.channels;
+                ptr = ptr + jpeg->img.width * jpeg->img.channels;
+            }
+
+            // Point to the next luma block
+            luma_y_block++;
+
+            if (mcu_w * 2 + 1 <= nmcu_w) // again continue this approach
+            {
+                uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + (mcu_w * 2 + 1) * 8) * jpeg->img.channels;
+                uint32_t colX = 8;
+
+                if ((mcu_w * 2 + 1 + 1) * 8 > jpeg->img.width)
+                    colX = jpeg->img.width % 8;
+                for (uint32_t row = 0; row < 8; ++row)
+                {
+                    for (uint32_t col = 0; col < colX; ++col)
+                    {
+                        total_pixels++;
+                        /* for (uint8_t i = 0; i < jpeg->img.channels; ++i) */
+                        /*     *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 +
+                         * col];
+                         */
+                        *(ptr++) = luma_y_block->block[row * 8 + col];
+                        *(ptr++) = chroma_cb_block->block[row * 8 + col];
+                        *(ptr++) = chroma_cr_block->block[row * 8 + col];
+                    }
+
+                    ptr = ptr - colX * jpeg->img.channels;
+                    ptr = ptr + jpeg->img.width * jpeg->img.channels;
+                }
+            }
+            // TODO:: There's no test image to check this one though
+            luma_y_block++;
+            chroma_cb_block++;
+            chroma_cr_block++;
+        }
+    }
+    return true;
+}
+
+bool ChromaSubSamplingBoth(JPEG* jpeg, uint8_t* image_data, uint32_t len)
+{
+    Log(Warning,"Chroma SubSampling -> Both\n");
+    uint32_t total_pixels = 0;
+    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
+    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
+
+
+    if (jpeg->img.channels < 3)
+    {
+        Log(Error,"Fewer channels than expected... Exiting ");
+        exit(-3);
+    }
+
+    uint32_t       hRange     = ceilf(nmcu_h / 2.0f);
+    uint32_t       wRange     = ceilf(nmcu_w / 2.0f);
+
+    const uint32_t alloc_size = (hRange * 2 * 8) * (wRange * 2 * 8) * jpeg->img.channels;
+
+    // temporary buffer to hold the decoded subsampled data
+    uint8_t *data = malloc(sizeof(*data) * alloc_size);
+    Log(Info, "Allocation size : %d.", alloc_size);
+
+    MCUBlock *luma_y_block    = jpeg->img.components[0].mcu_blocks;
+    MCUBlock *chroma_cb_block = jpeg->img.components[1].mcu_blocks;
+    MCUBlock *chroma_cr_block = jpeg->img.components[2].mcu_blocks;
+
+    // OOF, a greater pain
+    // Disregarding luminous intensity for now
+    // Read 4 blocks and arrange this is in a (0,1) -> (0,0) -> (1,1) -> (1,0) order
+    // Read 4 blocks and arrange them in a 2x2 blocks array
+    uint32_t adj_width  = wRange * 2 * 8;
+    uint32_t adj_height = hRange * 2 * 8;
+
+    for (uint32_t mcu_h = 0; mcu_h < hRange; mcu_h++)
+    {
+        for (uint32_t mcu_w = 0; mcu_w < wRange; mcu_w++)
+        {
+            // No padding or leftover considered for now
+            for (int h = 0; h < 2; ++h)
+            {
+                for (int w = 0; w < 2; ++w)
+                {
+                    // write it
+                    uint8_t *ptr = data + ((mcu_h * 2 + h) * 8 * adj_width + (mcu_w * 2 + w) * 8) * jpeg->img.channels;
+                    for (uint32_t row = 0; row < 8; ++row)
+                    {
+                        for (uint32_t col = 0; col < 8; ++col)
+                        {
+                            total_pixels++;
+                            *(ptr++) = luma_y_block->block[row * 8 + col];
+                            // lets fix the color sampling here
+                            *(ptr++) = chroma_cb_block->block[row * 8 + col];
+                            *(ptr++) = chroma_cr_block->block[row * 8 + col];
+                        }
+                        ptr = ptr - 8 * jpeg->img.channels;
+                        ptr = ptr + adj_width * jpeg->img.channels;
+                    }
+                    // Point to the next luma block now
+                    luma_y_block++;
+                }
+            }
+            chroma_cb_block++;
+            chroma_cr_block++;
+        }
+    }
+
+    uint32_t pixel_collected = 0;
+    if (adj_height != jpeg->img.height || adj_width != jpeg->img.width)
+    {
+        Log(Warning,
+            "------------------------------ Image dimension mismatch, auto correcting ------------------------------ ");
+        uint8_t *mem_ptr   = data;
+        uint32_t copybytes = 0;
+        for (uint32_t h = 0; h < jpeg->img.height; ++h)
+        {
+            copybytes = jpeg->img.width * jpeg->img.channels;
+            memcpy(image_data,mem_ptr,sizeof(*image_data) * copybytes);
+
+            image_data = image_data + copybytes;
+            pixel_collected = pixel_collected + jpeg->img.width;
+            mem_ptr    = mem_ptr + adj_width * jpeg->img.channels;
+        }
+    }
+    else
+        memcpy(image_data,data,sizeof(*image_data) * len);
+
+    Log(Error, "Pixel collected %u.",pixel_collected);
+    free(data);
+    return true;
+}
+
+void JPEGtoBMPChromaSubsampled(JPEG *jpeg, const char *output)
+{
+    // Lets try writing only the luminance part, not the chrominance part
+    // There are four modes of chroma subsampling
+
+    // Need to write the color pixels
+    // Form an 1D array
+
+    uint32_t totalpixels = 0;
+    uint8_t *image_data  = NULL;
+    uint32_t len         = 0;
+
+    JPEGToRawArray(jpeg, &image_data, &len);
+    YCbCrToRGB(jpeg, image_data);
+
+    Log(Warning, "Total pixel counts were approximately : %u.", totalpixels);
+    BMP bmp = {0};
+
+    // Memory for extra padding bytes are to be allocated seperately
+    InitBMP(&bmp, jpeg->img.width * jpeg->img.height * jpeg->img.channels + 10000, jpeg->img.channels, true);
+    WriteBMPHeader(&bmp);
+    WriteBMPData(&bmp, image_data, jpeg->img.width, jpeg->img.height, jpeg->img.channels);
+    WriteBMPToFile(&bmp, output);
+    DestroyBMP(&bmp);
+    free(image_data);
 }
