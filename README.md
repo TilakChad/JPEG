@@ -7,6 +7,7 @@ No support for decoding of :
 - Progressive DCT mode (yet) 
 - Lossless mode 
 - Arithmetic Encoding 
+- Oops, haven't considered single channel jpg images (normal map, specular map mostly use that)
 
 ## Build Instructions 
 
