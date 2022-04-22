@@ -1,6 +1,6 @@
 #include <stdlib.h>
 
-#include "../utility/log.h"
+#include "../../utility/log.h"
 #include "./bitstream.h"
 #include "jpeg.h"
 

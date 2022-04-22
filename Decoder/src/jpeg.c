@@ -1,3 +1,4 @@
+
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -7,8 +8,8 @@
 #include "./bitstream.h"
 #include "./jpeg.h"
 
-#include "../utility/bmp.h"
-#include "../utility/log.h"
+#include "../../utility/bmp.h"
+#include "../../utility/log.h"
 
 // JPEG decompressor using Inverse Cosine Transform
 void ProgressiveDCT(JPEG *img);

@@ -1,7 +1,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#include "../utility/log.h"
+#include "../../utility/log.h"
 #include "./jpeg.h"
 
 void DecodeHuffmanTable(HTable table)
