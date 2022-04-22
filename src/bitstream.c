@@ -10,6 +10,12 @@ typedef struct Symbol
     uint8_t val;
 } Symbol;
 
+bool ClearBitStream(BitStream* bit_stream, JPEG* img)
+{
+    bit_stream->len    = 0;
+    bit_stream->buffer = 0;
+}
+
 uint64_t ExtractBits(BitStream *bit_stream, uint64_t count, JPEG *img)
 {
     // Take bits from the MSB part right?
@@ -45,7 +51,7 @@ Symbol DecodeHuffmanSymbol(BitStream *bit_stream, JPEG *jpeg, HTable *htable)
 
         if (code - first < count)
         {
-            printf("Index is : %d while decoding %d.\n", index + code - first, code);
+            /* printf("Index is : %d while decoding %d.\n", index + code - first, code); */
             if (index + code - first >= htable->total_codes)
             {
                 Log(Error, "Index out of range");
@@ -67,8 +73,9 @@ Symbol DecodeHuffmanSymbol(BitStream *bit_stream, JPEG *jpeg, HTable *htable)
 bool ExtractHuffmanEncoded(JPEG *jpeg)
 {
     // start from jpeg->current pos and extract all the relevant huffman encoded stream
-    uint8_t current = 0;
-    uint8_t last    = jpeg->buffer[jpeg->pos++];
+    uint8_t  current = 0;
+    uint32_t hold    = jpeg->pos;
+    uint8_t  last    = jpeg->buffer[jpeg->pos++];
     while (jpeg->pos < jpeg->size)
     {
         current = jpeg->buffer[jpeg->pos++];
@@ -123,7 +130,7 @@ int32_t InterpretValue(uint64_t val, uint8_t len, JPEG *jpeg)
     // Else its negative number (i.e preceeded by 0)
     // So bitwise complement it and return negative value
     int32_t nval = ~val & ((1 << len) - 1);
-    Log(Warning, "Val is %02X, len is %d and returned %d.", val, len, -nval);
+    // Log(Warning, "Val is %02X, len is %d and returned %d.", val, len, -nval);
     return -nval;
 }
 
@@ -274,15 +281,16 @@ bool DecodeHuffmanStream(JPEG *jpeg)
         nmcu_w += 1;
 
     // Allocate resource for mcu blocks
-
     BitStream bit_stream               = {0};
     jpeg->img.components[0].mcu_counts = nmcu_h * nmcu_w;
-    jpeg->img.components[1].mcu_counts = (nmcu_h / jpeg->img.horizontal_subsampling) * (nmcu_w / jpeg->img.vertical_subsampling);
-    jpeg->img.components[2].mcu_counts = (nmcu_h / jpeg->img.horizontal_subsampling) * (nmcu_w / jpeg->img.vertical_subsampling);
-
+    jpeg->img.components[1].mcu_counts =
+        (nmcu_h / jpeg->img.horizontal_subsampling) * (nmcu_w / jpeg->img.vertical_subsampling);
+    jpeg->img.components[2].mcu_counts =
+        (nmcu_h / jpeg->img.horizontal_subsampling) * (nmcu_w / jpeg->img.vertical_subsampling);
 
     for (uint32_t i = 0; i < jpeg->img.channels; ++i)
-        jpeg->img.components[i].mcu_blocks = malloc(sizeof(*jpeg->img.components[i].mcu_blocks) * jpeg->img.components[i].mcu_counts);
+        jpeg->img.components[i].mcu_blocks =
+            malloc(sizeof(*jpeg->img.components[i].mcu_blocks) * jpeg->img.components[i].mcu_counts);
 
     int total_mcus = 0;
     for (uint32_t i = 0; i < jpeg->img.channels; ++i)
@@ -292,12 +300,13 @@ bool DecodeHuffmanStream(JPEG *jpeg)
 
     // Print all DC tables and their components
     // for (int mcu = 0; mcu < nmcu_h * nmcu_w; ++mcu)
-    int luma_count = 0;
-    int cb_index = 0, cr_index = 0, luma_index = 0;
+    int       luma_count = 0;
+    int       cb_index = 0, cr_index = 0, luma_index = 0;
     const int luma_max_sample = jpeg->img.vertical_subsampling * jpeg->img.horizontal_subsampling;
 
-    bool sampleCb = false, sampleCr = false, sampleLuma = true;
+    bool      sampleCb = false, sampleCr = false, sampleLuma = true;
 
+    uint32_t  successive_count = 0;
     for (int mcu = 0; mcu < total_mcus; ++mcu)
     {
         // TODO :: Write this loop better
@@ -306,15 +315,15 @@ bool DecodeHuffmanStream(JPEG *jpeg)
         {
             luma_count++;
             sampleLuma = true;
-            comp = 0;
+            comp       = 0;
         }
         else
         {
             if (!sampleCb && !sampleCr)
             {
                 sampleLuma = false;
-                sampleCb = true;
-                comp     = 1;
+                sampleCb   = true;
+                comp       = 1;
             }
             else if (sampleCb && !sampleCr)
             {
@@ -324,13 +333,24 @@ bool DecodeHuffmanStream(JPEG *jpeg)
             }
             else
             {
-                sampleCb   = false;
-                sampleCr   = false;
-                sampleLuma = true;
-                luma_count = 1;
-                comp       = 0;
+                sampleCb         = false;
+                sampleCr         = false;
+                sampleLuma       = true;
+                successive_count = successive_count + 1;
+                luma_count       = 1;
+                comp             = 0;
             }
         }
+
+
+        if (jpeg->img.use_restart_interval && (successive_count >= jpeg->img.restart_interval))
+        {
+            ClearBitStream(&bit_stream, jpeg);
+            for (int i = 0; i < 4; ++i)
+                prevDC[i] = 0;
+            successive_count = 0;
+            Log(Error, "Successfully restarted interval...");
+         }
 
         MCUBlock *active_mcu;
         if (sampleLuma)
@@ -365,6 +385,5 @@ bool DecodeHuffmanStream(JPEG *jpeg)
             printf("%7d ", jpeg->img.components[0].mcu_blocks[0].block[i * 8 + j]);
         putchar('\n');
     }
-
     return true;
 }

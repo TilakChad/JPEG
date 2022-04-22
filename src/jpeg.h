@@ -72,13 +72,15 @@ typedef struct JPEGComponent
     uint8_t htable_dc_index;
     uint8_t qtable_index;
 
-    uint16_t  mcu_counts;
+    uint32_t  mcu_counts;
     MCUBlock *mcu_blocks;
 } JPEGComponent;
 
-
 typedef struct JPEGInfo
 {
+    bool     use_restart_interval;
+    uint32_t restart_interval;
+
     uint8_t horizontal_subsampling;
     uint8_t vertical_subsampling;
 

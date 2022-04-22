@@ -23,9 +23,9 @@ void DecodeJPEG(JPEG *jpeg, HTable *htable, QTable *qtable);
 void JPEGtoBMP(JPEG *jpeg, const char *output_file);
 void JPEGtoBMPChromaSubsampled(JPEG *jpeg, const char *output);
 
-void LoadJpegFile(JPEG* image, const char *path)
+void LoadJpegFile(JPEG *image, const char *path)
 {
-    FILE *fp    = fopen(path, "rb");
+    FILE *fp = fopen(path, "rb");
     if (!fp)
     {
         fprintf(stderr, "Error : Failed to open file %s.\n", path);
@@ -37,14 +37,14 @@ void LoadJpegFile(JPEG* image, const char *path)
 
     rewind(fp);
 
-    image->buffer    = malloc(sizeof(*image->buffer) * (size + 1));
+    image->buffer   = malloc(sizeof(*image->buffer) * (size + 1));
     size_t readSize = fread(image->buffer, sizeof(*image->buffer), size + 1, fp);
 
-    image->size      = readSize;
+    image->size     = readSize;
     if (readSize != size)
     {
         fprintf(stderr, "Warning : Unknown error in opening file %s.\n", path);
-        return ;
+        return;
     }
     InitJPEGDecoder(image);
 }
@@ -165,11 +165,14 @@ void HandleAPPHeaders(JPEG *image)
         }
         else
         {
+            Log(Error, "Into the infinite world at %d and max size %d.", image->pos, image->size);
+            Log(Warning, "This is probably the end, so quitting");
+            return;
         }
     }
 }
 
-void CleanUpDecoder(JPEG* image)
+void CleanUpDecoder(JPEG *image)
 {
     free(image->buffer);
 
@@ -212,6 +215,8 @@ void ProgressiveDCT(JPEG *img)
 {
     Log(Info,
         "------------------------------ Progressive Discrete Cosine Transformed JPEG ------------------------------");
+
+    Log(Error, "Not Handled Yet");
 }
 
 void BaselineDCT(JPEG *img)
@@ -401,7 +406,10 @@ void DefineRestartIntervalSegment(JPEG *jpeg)
 {
     uint16_t length = GetMarkerLength(jpeg->buffer + jpeg->pos);
     Log(Warning, "Got to JPEG Restart Interval and skipped with length : %d.", length);
+    jpeg->img.use_restart_interval = true;
+    jpeg->img.restart_interval     = (jpeg->buffer[jpeg->pos + 2] << 8) | jpeg->buffer[jpeg->pos + 3];
     jpeg->pos += length;
+    Log(Warning, "Restart interval is set to : %d.", jpeg->img.restart_interval);
 }
 
 // Or should we say, blocks to raw array?
@@ -415,7 +423,8 @@ void DefineRestartIntervalSegment(JPEG *jpeg)
 /*     // Form an 1D array */
 
 /*     uint32_t totalpixels = 0; */
-/*     uint8_t *image_data  = malloc(sizeof(*image_data) * (jpeg->img.width * jpeg->img.height * jpeg->img.channels)); */
+/*     uint8_t *image_data  = malloc(sizeof(*image_data) * (jpeg->img.width * jpeg->img.height * jpeg->img.channels));
+ */
 
 /*     for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h) */
 /*     { */
@@ -432,9 +441,11 @@ void DefineRestartIntervalSegment(JPEG *jpeg)
 /*                 { */
 /*                     totalpixels++; */
 /*                     for (uint8_t i = 0; i < jpeg->img.channels; ++i) */
-/*                         *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; */
+/*                         *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
+ */
 /*                     /\* for (uint8_t i = 0; i < 3; ++i) *\/ */
-/*                     /\*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; *\/ */
+/*                     /\*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 +
+ * col]; *\/ */
 /*                 } */
 /*                 ptr = ptr - colX * jpeg->img.channels; */
 /*                 ptr = ptr + jpeg->img.width * jpeg->img.channels; */
@@ -555,7 +566,6 @@ void InverseSignedNormalization(JPEG *jpeg)
     }
 }
 
-
 void YCbCrToRGB(JPEG *jpeg, uint8_t *img_data)
 {
     int16_t colors[4];
@@ -569,9 +579,9 @@ void YCbCrToRGB(JPEG *jpeg, uint8_t *img_data)
             colors[2] = img_data[2] - 128; // This concludes the JPEG decompressor
                                            // Was fun doing it
 
-            int16_t r = colors[0] + 1.402f * colors[2];
-            int16_t g = colors[0] - 0.3441f * colors[1] - 0.71414f * colors[2];
-            int16_t b = colors[0] + 1.772f * colors[1];
+            int16_t r   = colors[0] + 1.402f * colors[2];
+            int16_t g   = colors[0] - 0.3441f * colors[1] - 0.71414f * colors[2];
+            int16_t b   = colors[0] + 1.772f * colors[1];
 
             img_data[0] = clamp0_255(r);
             img_data[1] = clamp0_255(g);
@@ -581,35 +591,36 @@ void YCbCrToRGB(JPEG *jpeg, uint8_t *img_data)
             /* img_data[0] = clamp0_255(img_data[0]); */
             /* img_data[1] = clamp0_255(img_data[0]); */
             /* img_data[2] = clamp0_255(img_data[0]); */
+
             img_data = img_data + jpeg->img.channels;
         }
     }
 }
 
-
-
-bool ChromaSubSamplingNone(JPEG* jpeg, uint8_t* image_data, uint32_t len);
-bool ChromaSubSamplingBoth(JPEG* jpeg, uint8_t* image_data, uint32_t len);
+bool ChromaSubSamplingNone(JPEG *jpeg, uint8_t *image_data, uint32_t len);
+bool ChromaSubSamplingBoth(JPEG *jpeg, uint8_t *image_data, uint32_t len);
+bool ChromaSubSamplingAll(JPEG *jpeg, uint8_t *image_data, uint32_t len);
 
 // returns status
-bool JPEGToRawArray(JPEG* jpeg, uint8_t** out_data, uint32_t* len)
+bool JPEGToRawArray(JPEG *jpeg, uint8_t **out_data, uint32_t *len)
 {
     *out_data = malloc(sizeof(**out_data) * (jpeg->img.width * jpeg->img.height * jpeg->img.channels));
     *len      = jpeg->img.width * jpeg->img.height * jpeg->img.channels;
 
-    if (jpeg->img.vertical_subsampling == 1 && jpeg->img.horizontal_subsampling == 1)
-        return ChromaSubSamplingNone(jpeg,*out_data,*len);
-    if (jpeg->img.vertical_subsampling == 2 && jpeg->img.horizontal_subsampling == 2)
-        return ChromaSubSamplingBoth(jpeg,*out_data, *len);
-    Log(Error,"Chroma subsampling method not supported");
+    /* if (jpeg->img.vertical_subsampling == 1 && jpeg->img.horizontal_subsampling == 1) */
+    /*     return ChromaSubSamplingNone(jpeg,*out_data,*len); */
+    /* if (jpeg->img.vertical_subsampling == 2 && jpeg->img.horizontal_subsampling == 2) */
+    //    return ChromaSubSamplingBoth(jpeg,*out_data, *len);
+    return ChromaSubSamplingAll(jpeg, *out_data, *len);
+    Log(Error, "Chroma subsampling method not supported");
     return false;
 }
 
-bool ChromaSubSamplingNone(JPEG* jpeg, uint8_t* image_data, uint32_t len)
+bool ChromaSubSamplingNone(JPEG *jpeg, uint8_t *image_data, uint32_t len)
 {
     uint32_t total_pixels = 0;
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
+    uint32_t nmcu_h       = (jpeg->img.height + 7) / 8;
+    uint32_t nmcu_w       = (jpeg->img.width + 7) / 8;
 
     for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h)
     {
@@ -629,114 +640,38 @@ bool ChromaSubSamplingNone(JPEG* jpeg, uint8_t* image_data, uint32_t len)
                     for (uint8_t i = 0; i < jpeg->img.channels; ++i)
                         *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
                     /* for (uint8_t i = 0; i < 3; ++i) */
-                    /*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col]; */
-                }
-                ptr = ptr - colX * jpeg->img.channels;
-                ptr = ptr + jpeg->img.width * jpeg->img.channels;
-            }
-        }
-    }
-    return true;
-}
-
-void ChromaSubSamplingVertical()
-{
-
-}
-
-bool ChromaSubSamplingHorizontal(JPEG* jpeg, uint8_t* image_data)
-{
-    // oof, this is pain
-    uint32_t total_pixels = 0;
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
-
-
-    if (jpeg->img.channels < 3)
-    {
-        Log(Error,"Fewer channels than expected...");
-        exit(-3);
-    }
-
-    MCUBlock *luma_y_block    = jpeg->img.components[0].mcu_blocks;
-    MCUBlock *chroma_cb_block = jpeg->img.components[1].mcu_blocks;
-    MCUBlock *chroma_cr_block = jpeg->img.components[2].mcu_blocks;
-
-    int       wRange          = ceilf(nmcu_w / 2);
-    for (uint32_t mcu_h = 0; mcu_h < nmcu_h; ++mcu_h)
-    {
-        for (uint32_t mcu_w = 0; mcu_w < wRange; ++mcu_w)
-        {
-            uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + mcu_w * 2 * 8) * jpeg->img.channels;
-            uint32_t colX = 8;
-
-            if ((mcu_w * 2 + 1) * 8 > jpeg->img.width)
-                colX = jpeg->img.width % 8;
-            for (uint32_t row = 0; row < 8; ++row)
-            {
-                for (uint32_t col = 0; col < colX; ++col)
-                {
-                    total_pixels++;
-                    /* for (uint8_t i = 0; i < jpeg->img.channels; ++i) */
-                    /*     *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
+                    /*     *(ptr++) = jpeg->img.components[0].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 + col];
                      */
-                    *(ptr++) = luma_y_block->block[row*8+col];
-                    *(ptr++) = chroma_cb_block->block[row*8+col];
-                    *(ptr++) = chroma_cr_block->block[row*8+col];
                 }
-
                 ptr = ptr - colX * jpeg->img.channels;
                 ptr = ptr + jpeg->img.width * jpeg->img.channels;
             }
-
-            // Point to the next luma block
-            luma_y_block++;
-
-            if (mcu_w * 2 + 1 <= nmcu_w) // again continue this approach
-            {
-                uint8_t *ptr  = image_data + (mcu_h * 8 * jpeg->img.width + (mcu_w * 2 + 1) * 8) * jpeg->img.channels;
-                uint32_t colX = 8;
-
-                if ((mcu_w * 2 + 1 + 1) * 8 > jpeg->img.width)
-                    colX = jpeg->img.width % 8;
-                for (uint32_t row = 0; row < 8; ++row)
-                {
-                    for (uint32_t col = 0; col < colX; ++col)
-                    {
-                        total_pixels++;
-                        /* for (uint8_t i = 0; i < jpeg->img.channels; ++i) */
-                        /*     *(ptr++) = jpeg->img.components[i].mcu_blocks[mcu_h * nmcu_w + mcu_w].block[row * 8 +
-                         * col];
-                         */
-                        *(ptr++) = luma_y_block->block[row * 8 + col];
-                        *(ptr++) = chroma_cb_block->block[row * 8 + col];
-                        *(ptr++) = chroma_cr_block->block[row * 8 + col];
-                    }
-
-                    ptr = ptr - colX * jpeg->img.channels;
-                    ptr = ptr + jpeg->img.width * jpeg->img.channels;
-                }
-            }
-            // TODO:: There's no test image to check this one though
-            luma_y_block++;
-            chroma_cb_block++;
-            chroma_cr_block++;
         }
     }
     return true;
 }
 
-bool ChromaSubSamplingBoth(JPEG* jpeg, uint8_t* image_data, uint32_t len)
+bool ChromaSubSamplingVertical()
 {
-    Log(Warning,"Chroma SubSampling -> Both\n");
-    uint32_t total_pixels = 0;
-    uint32_t nmcu_h = (jpeg->img.height + 7) / 8;
-    uint32_t nmcu_w = (jpeg->img.width + 7) / 8;
+    return true;
+}
 
+bool ChromaSubSamplingHorizontal(JPEG *jpeg, uint8_t *image_data)
+{
+    return true;
+}
+
+bool ChromaSubSamplingBoth(JPEG *jpeg, uint8_t *image_data, uint32_t len)
+{
+    // This can be made to handle every other ones too
+    Log(Warning, "Chroma SubSampling -> Both\n");
+    uint32_t total_pixels = 0;
+    uint32_t nmcu_h       = (jpeg->img.height + 7) / 8;
+    uint32_t nmcu_w       = (jpeg->img.width + 7) / 8;
 
     if (jpeg->img.channels < 3)
     {
-        Log(Error,"Fewer channels than expected... Exiting ");
+        Log(Error, "Fewer channels than expected... Exiting ");
         exit(-3);
     }
 
@@ -777,9 +712,111 @@ bool ChromaSubSamplingBoth(JPEG* jpeg, uint8_t* image_data, uint32_t len)
                         {
                             total_pixels++;
                             *(ptr++) = luma_y_block->block[row * 8 + col];
+
                             // lets fix the color sampling here
-                            *(ptr++) = chroma_cb_block->block[row * 8 + col];
-                            *(ptr++) = chroma_cr_block->block[row * 8 + col];
+                            // Stretch one luma to all four parts
+                            // Take one quarter and stretch it to fill all four quarters
+
+                            *(ptr++) = chroma_cb_block->block[(h * 4 + row % 4) * 8 + w * 4 + (col % 4)];
+                            *(ptr++) = chroma_cr_block->block[(h * 4 + row % 4) * 8 + w * 4 + (col % 4)];
+                        }
+                        ptr = ptr - 8 * jpeg->img.channels;
+                        ptr = ptr + adj_width * jpeg->img.channels;
+                    }
+                    // Point to the next luma block now
+                    luma_y_block++;
+                }
+            }
+            chroma_cb_block++;
+            chroma_cr_block++;
+        }
+    }
+
+    if (adj_height != jpeg->img.height || adj_width != jpeg->img.width)
+    {
+        Log(Warning,
+            "------------------------------ Image dimension mismatch, auto correcting ------------------------------ ");
+        uint8_t *mem_ptr   = data;
+        uint32_t copybytes = 0;
+        for (uint32_t h = 0; h < jpeg->img.height; ++h)
+        {
+            copybytes = jpeg->img.width * jpeg->img.channels;
+            memcpy(image_data, mem_ptr, sizeof(*image_data) * copybytes);
+
+            image_data = image_data + copybytes;
+            mem_ptr    = mem_ptr + adj_width * jpeg->img.channels;
+        }
+    }
+    else
+        memcpy(image_data, data, sizeof(*image_data) * len);
+
+    free(data);
+    return true;
+}
+
+bool ChromaSubSamplingAll(JPEG *jpeg, uint8_t *image_data, uint32_t len)
+{
+    // This can be made to handle every other ones too
+    Log(Warning, "Chroma SubSampling -> Both\n");
+    uint32_t total_pixels = 0;
+    uint32_t nmcu_h       = (jpeg->img.height + 7) / 8;
+    uint32_t nmcu_w       = (jpeg->img.width + 7) / 8;
+
+    if (jpeg->img.channels < 3)
+    {
+        Log(Error, "Fewer channels than expected... Exiting ");
+        exit(-3);
+    }
+
+    uint32_t       hRange     = ceilf(nmcu_h / (float)jpeg->img.vertical_subsampling);
+    uint32_t       wRange     = ceilf(nmcu_w / (float)jpeg->img.horizontal_subsampling);
+
+    const uint32_t alloc_size = (hRange * jpeg->img.vertical_subsampling * 8) *
+                                (wRange * jpeg->img.horizontal_subsampling * 8) * jpeg->img.channels;
+
+    // temporary buffer to hold the decoded subsampled data
+    uint8_t *data = malloc(sizeof(*data) * alloc_size);
+    Log(Info, "Allocation size : %d.", alloc_size);
+
+    MCUBlock *luma_y_block    = jpeg->img.components[0].mcu_blocks;
+    MCUBlock *chroma_cb_block = jpeg->img.components[1].mcu_blocks;
+    MCUBlock *chroma_cr_block = jpeg->img.components[2].mcu_blocks;
+
+    // OOF, a greater pain
+    // Disregarding luminous intensity for now
+    // Read 4 blocks and arrange this is in a (0,1) -> (0,0) -> (1,1) -> (1,0) order
+    // Read 4 blocks and arrange them in a 2x2 blocks array
+    uint32_t adj_width  = wRange * jpeg->img.horizontal_subsampling * 8;
+    uint32_t adj_height = hRange * jpeg->img.vertical_subsampling * 8;
+
+    for (uint32_t mcu_h = 0; mcu_h < hRange; mcu_h++)
+    {
+        for (uint32_t mcu_w = 0; mcu_w < wRange; mcu_w++)
+        {
+            // No padding or leftover considered for now
+            for (int h = 0; h < jpeg->img.vertical_subsampling; ++h)
+            {
+                for (int w = 0; w < jpeg->img.horizontal_subsampling; ++w)
+                {
+                    // write it
+                    uint8_t *ptr = data + ((mcu_h * jpeg->img.vertical_subsampling + h) * 8 * adj_width +
+                                           (mcu_w * jpeg->img.horizontal_subsampling + w) * 8) *
+                                              jpeg->img.channels;
+                    for (uint32_t row = 0; row < 8; ++row)
+                    {
+                        for (uint32_t col = 0; col < 8; ++col)
+                        {
+                            total_pixels++;
+                            *(ptr++) = luma_y_block->block[row * 8 + col];
+                            // lets fix the color sampling here
+                            // Stretch one luma to all four parts
+                            // Take one quarter and stretch it to fill all four quarters
+                            // csf -> chroma sample factor
+                            const int csfX = 8 / jpeg->img.horizontal_subsampling;
+                            const int csfY = 8 / jpeg->img.vertical_subsampling;
+
+                            *(ptr++) = chroma_cb_block->block[(h * csfY + row % csfY) * 8 + w * csfX + (col % csfX)];
+                            *(ptr++) = chroma_cr_block->block[(h * csfY + row % csfY) * 8 + w * csfX + (col % csfX)];
                         }
                         ptr = ptr - 8 * jpeg->img.channels;
                         ptr = ptr + adj_width * jpeg->img.channels;
@@ -803,17 +840,15 @@ bool ChromaSubSamplingBoth(JPEG* jpeg, uint8_t* image_data, uint32_t len)
         for (uint32_t h = 0; h < jpeg->img.height; ++h)
         {
             copybytes = jpeg->img.width * jpeg->img.channels;
-            memcpy(image_data,mem_ptr,sizeof(*image_data) * copybytes);
+            memcpy(image_data, mem_ptr, sizeof(*image_data) * copybytes);
 
             image_data = image_data + copybytes;
-            pixel_collected = pixel_collected + jpeg->img.width;
             mem_ptr    = mem_ptr + adj_width * jpeg->img.channels;
         }
     }
     else
-        memcpy(image_data,data,sizeof(*image_data) * len);
+        memcpy(image_data, data, sizeof(*image_data) * len);
 
-    Log(Error, "Pixel collected %u.",pixel_collected);
     free(data);
     return true;
 }
